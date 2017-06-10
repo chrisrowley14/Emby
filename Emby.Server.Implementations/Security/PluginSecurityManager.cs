@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -47,7 +47,8 @@ namespace Emby.Server.Implementations.Security
         {
             get
             {
-                LazyInitializer.EnsureInitialized(ref _isMbSupporter, ref _isMbSupporterInitialized, ref _isMbSupporterSyncLock, () => GetSupporterRegistrationStatus().Result.IsRegistered);
+                //LazyInitializer.EnsureInitialized(ref _isMbSupporter, ref _isMbSupporterInitialized, ref _isMbSupporterSyncLock, () => GetSupporterRegistrationStatus().Result.IsRegistered);
+                LazyInitializer.EnsureInitialized(ref _isMbSupporter, ref _isMbSupporterInitialized, ref _isMbSupporterSyncLock, () => GetRegistrationStatus().Result.IsRegistered);
                 return _isMbSupporter.Value;
             }
         }
@@ -117,7 +118,8 @@ namespace Emby.Server.Implementations.Security
         /// <returns>Task{MBRegistrationRecord}.</returns>
         public Task<MBRegistrationRecord> GetRegistrationStatus(string feature, string mb2Equivalent = null)
         {
-            return GetRegistrationStatusInternal(feature, mb2Equivalent);
+            //return GetRegistrationStatusInternal(feature, mb2Equivalent);
+            return GetRegistrationStatus();
         }
 
         /// <summary>
@@ -129,12 +131,15 @@ namespace Emby.Server.Implementations.Security
         /// <returns>Task{MBRegistrationRecord}.</returns>
         public Task<MBRegistrationRecord> GetRegistrationStatus(string feature, string mb2Equivalent, string version)
         {
-            return GetRegistrationStatusInternal(feature, mb2Equivalent, version);
+            //return GetRegistrationStatusInternal(feature, mb2Equivalent, version);
+            return GetRegistrationStatus();
         }
 
-        private Task<MBRegistrationRecord> GetSupporterRegistrationStatus()
+        //private Task<MBRegistrationRecord> GetSupporterRegistrationStatus()
+        private async Task<MBRegistrationRecord> GetRegistrationStatus()
         {
-            return GetRegistrationStatusInternal("MBSupporter", null, _appHost.ApplicationVersion.ToString());
+            //return GetRegistrationStatusInternal("MBSupporter", null, _appHost.ApplicationVersion.ToString());
+            return new MBRegistrationRecord{IsRegistered = true,ExpirationDate = DateTime.Now.AddMonths(1),RegChecked = true,RegError = false};
         }
 
         /// <summary>
@@ -239,109 +244,6 @@ namespace Emby.Server.Implementations.Security
             {
 
             }
-        }
-
-        private async Task<MBRegistrationRecord> GetRegistrationStatusInternal(string feature,
-            string mb2Equivalent = null,
-            string version = null)
-        {
-            var regInfo = LicenseFile.GetRegInfo(feature);
-            var lastChecked = regInfo == null ? DateTime.MinValue : regInfo.LastChecked;
-            var expDate = regInfo == null ? DateTime.MinValue : regInfo.ExpirationDate;
-
-            var maxCacheDays = 14;
-            var nextCheckDate = new [] { expDate, lastChecked.AddDays(maxCacheDays) }.Min();
-
-            if (nextCheckDate > DateTime.UtcNow.AddDays(maxCacheDays))
-            {
-                nextCheckDate = DateTime.MinValue;
-            }
-
-            //check the reg file first to alleviate strain on the MB admin server - must actually check in every 30 days tho
-            var reg = new RegRecord
-            {
-                // Cache the result for up to a week
-                registered = regInfo != null && nextCheckDate >= DateTime.UtcNow && expDate >= DateTime.UtcNow,
-                expDate = expDate
-            };
-
-            var success = reg.registered;
-
-            if (!(lastChecked > DateTime.UtcNow.AddDays(-1)) || !reg.registered)
-            {
-                var data = new Dictionary<string, string>
-                {
-                    { "feature", feature }, 
-                    { "key", SupporterKey }, 
-                    { "mac", _appHost.SystemId }, 
-                    { "systemid", _appHost.SystemId }, 
-                    { "mb2equiv", mb2Equivalent }, 
-                    { "ver", version }, 
-                    { "platform", _appHost.OperatingSystemDisplayName }
-                };
-
-                try
-                {
-                    var options = new HttpRequestOptions
-                    {
-                        Url = MBValidateUrl,
-
-                        // Seeing block length errors
-                        EnableHttpCompression = false,
-                        BufferContent = false
-                    };
-
-                    options.SetPostData(data);
-
-                    using (var json = (await _httpClient.Post(options).ConfigureAwait(false)).Content)
-                    {
-                        reg = _jsonSerializer.DeserializeFromStream<RegRecord>(json);
-                        success = true;
-                    }
-
-                    if (reg.registered)
-                    {
-                        _logger.Info("Registered for feature {0}", feature);
-                        LicenseFile.AddRegCheck(feature, reg.expDate);
-                    }
-                    else
-                    {
-                        _logger.Info("Not registered for feature {0}", feature);
-                        LicenseFile.RemoveRegCheck(feature);
-                    }
-
-                }
-                catch (Exception e)
-                {
-                    _logger.ErrorException("Error checking registration status of {0}", e, feature);
-                }
-            }
-
-            var record = new MBRegistrationRecord
-            {
-                IsRegistered = reg.registered,
-                ExpirationDate = reg.expDate,
-                RegChecked = true,
-                RegError = !success
-            };
-
-            record.TrialVersion = IsInTrial(reg.expDate, record.RegChecked, record.IsRegistered);
-            record.IsValid = !record.RegChecked || record.IsRegistered || record.TrialVersion;
-
-            return record;
-        }
-
-        private bool IsInTrial(DateTime expirationDate, bool regChecked, bool isRegistered)
-        {
-            //don't set this until we've successfully obtained exp date
-            if (!regChecked)
-            {
-                return false;
-            }
-
-            var isInTrial = expirationDate > DateTime.UtcNow;
-
-            return isInTrial && !isRegistered;
         }
 
         /// <summary>
